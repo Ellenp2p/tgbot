@@ -13,9 +13,6 @@ name: Deps
 on:
   push:
     branches: [main]
-    paths:
-      - vcpkg.json
-      - .github/workflows/deps.yml
   schedule:
     - cron: '23 3 * * *'   # 每天 03:23 UTC 检查上游
   workflow_dispatch:
