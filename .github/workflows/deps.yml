@@ -18,6 +18,10 @@ on:
     - cron: '23 3 * * *'   # 每天 03:23 UTC 检查上游
   workflow_dispatch:
 
+env:
+  # Alpine(musl) 上 vcpkg 官方 cmake 是 glibc 预编译版跑不了，强制用系统工具链
+  VCPKG_FORCE_SYSTEM_BINARIES: "1"
+
 permissions:
   contents: write
 
