@@ -70,8 +70,10 @@ jobs:
   deps:
     name: deps (${{ matrix.name }})
     needs: check
-    # push / 手动 直接跑；定时触发仅在上游相关 port 变化时跑
-    if: ${{ github.event_name != 'schedule' || needs.check.outputs.changed == 'true' }}
+    # push / 手动 直接跑；定时触发仅在上游相关 port 变化时跑。
+    # 注意必须包 always()：check job 在 push 时被跳过，GitHub 默认会把
+    # 依赖它的 job 一并跳过，无论 if 表达式本身是否为真
+    if: ${{ always() && (github.event_name != 'schedule' || needs.check.outputs.changed == 'true') }}
     runs-on: ${{ matrix.os }}
     container: ${{ matrix.container }}
     strategy:
