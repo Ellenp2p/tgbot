@@ -1,8 +1,9 @@
 # tgbot — 预编译 vcpkg 依赖
 #
 # 触发时机：
-#   - push 到 main（vcpkg.json 或本工作流变化时）
-#   - 每日定时（检查 microsoft/vcpkg 上游，有更新即重编）
+#   - push 到 main（框架源码 / vcpkg.json 变化，跑一遍 sanity build）
+#   - 每日定时：只做上游差异检查，我们依赖的 vcpkg port 有变化才重编
+#     （上游发新 release → port 更新 → 触发重编，等价于"等上游 release"）
 #   - 手动
 # 产物发布到 tag `deps` 的 rolling release：
 #   - vcpkg-bincache-<triplet>.tar.gz  预编译的 vcpkg binary cache
@@ -17,16 +18,60 @@ on:
     - cron: '23 3 * * *'   # 每天 03:23 UTC 检查上游
   workflow_dispatch:
 
-env:
-  # Alpine(musl) 上 vcpkg 官方 cmake 是 glibc 预编译版跑不了，强制用系统工具链
-  VCPKG_FORCE_SYSTEM_BINARIES: "1"
-
 permissions:
   contents: write
 
 jobs:
+  # 仅定时触发时运行：对比上次记录的 vcpkg commit 与上游 HEAD，
+  # 我们关注的 port 目录没有变化就跳过整个构建（每天几十秒）
+  check:
+    if: ${{ github.event_name == 'schedule' }}
+    runs-on: ubuntu-latest
+    outputs:
+      changed: ${{ steps.diff.outputs.changed }}
+    steps:
+      - name: Diff upstream ports since last build
+        id: diff
+        run: |
+          base=https://github.com/Ellenp2p/tgbot/releases/download/deps
+          old=$(curl -fsSL "$base/vcpkg-commit.txt" 2>/dev/null || true)
+          if [ -z "$old" ]; then
+            echo "no previous build, full build needed"
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "last built commit: $old"
+          git init -q .vcpkg-check
+          cd .vcpkg-check
+          git remote add origin https://github.com/microsoft/vcpkg.git
+          git fetch --depth 1 -q origin main
+          new=$(git rev-parse FETCH_HEAD)
+          echo "upstream HEAD: $new"
+          if [ "$old" = "$new" ]; then
+            echo "vcpkg HEAD unchanged, skip"
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if ! git fetch --depth 1 -q origin "$old"; then
+            echo "cannot fetch previous commit, full build to be safe"
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          # 只关注我们依赖的 port 目录（boost-* 覆盖 boost-asio/beast 的全部传递依赖）
+          if [ -z "$(git diff --name-only "$old" "$new" -- ports/openssl ports/sqlite3 ports/spdlog ports/fmt ports/nlohmann-json "ports/boost-*")" ]; then
+            echo "no changes in watched ports, skip"
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "watched ports changed:"
+            git diff --name-only "$old" "$new" -- ports/openssl ports/sqlite3 ports/spdlog ports/fmt ports/nlohmann-json "ports/boost-*"
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          fi
+
   deps:
     name: deps (${{ matrix.name }})
+    needs: check
+    # push / 手动 直接跑；定时触发仅在上游相关 port 变化时跑
+    if: ${{ github.event_name != 'schedule' || needs.check.outputs.changed == 'true' }}
     runs-on: ${{ matrix.os }}
     container: ${{ matrix.container }}
     strategy:
@@ -78,13 +123,15 @@ jobs:
           git -C .vcpkg rev-parse HEAD > vcpkg-commit.txt
           echo "vcpkg commit: $(cat vcpkg-commit.txt)"
 
-      # 缓存 key 含 vcpkg.json 与当天 vcpkg commit：
-      # 上游没更新时缓存命中，整个 job 只花几分钟；上游更新则全量重编并刷新 release
+      # key 只含 vcpkg.json；用前缀 restore 恢复上次缓存，
+      # vcpkg 按 ABI 哈希命中未变化的包（如 openssl 没发版就不重编），
+      # 只有 ABI 变化的包才真正编译
       - name: Cache vcpkg binary cache
         uses: actions/cache@v4
         with:
           path: vcpkg-bincache
-          key: deps-${{ matrix.triplet }}-${{ hashFiles('vcpkg.json') }}-${{ hashFiles('vcpkg-commit.txt') }}
+          key: deps-${{ matrix.triplet }}-${{ hashFiles('vcpkg.json') }}
+          restore-keys: deps-${{ matrix.triplet }}-
 
       - name: Build deps
         run: |
