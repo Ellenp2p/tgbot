@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.25)
-project(tgbot VERSION 0.2.0 LANGUAGES CXX)
+project(tg_bot_framework VERSION 0.2.0 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -12,7 +12,7 @@ if(MSVC)
     add_compile_definitions(_WIN32_WINNT=0x0A00)
 endif()
 
-# ---- 依赖（全部由 vcpkg 提供） ----
+# ---- 依赖（全部由 vcpkg 提供最新版本） ----
 find_package(Boost REQUIRED)
 if(TARGET Boost::headers)
     set(TGBOT_BOOST_TARGET Boost::headers)
@@ -33,6 +33,7 @@ add_library(tgbot STATIC
     src/long_poll.cpp
     src/rate_limiter.cpp
     src/sqlite_state_store.cpp
+    src/webhook.cpp
 )
 
 target_include_directories(tgbot PUBLIC
@@ -49,7 +50,7 @@ target_link_libraries(tgbot PUBLIC
     Threads::Threads
 )
 
-# 源码是 UTF-8，MSVC 需要显式指定
+# 源码是 UTF-8，MSVC 需要显式指定，否则中文/宽字符字符串字面量会乱码
 if(MSVC)
     target_compile_options(tgbot PUBLIC /utf-8)
 endif()
@@ -76,4 +77,26 @@ endif()
 option(TGBOT_STATIC "Link fully static binaries on Linux (musl recommended)" ON)
 if(TGBOT_STATIC AND UNIX AND NOT APPLE)
     target_link_options(tgbot PUBLIC -static -static-libgcc -static-libstdc++)
+endif()
+
+# ---- 示例机器人 ----
+option(TGBOT_BUILD_EXAMPLES "Build example bots" ON)
+if(TGBOT_BUILD_EXAMPLES)
+    # echo 演示：回声 / /start / inline 键盘
+    add_executable(echo_bot examples/echo_bot/main.cpp)
+    target_link_libraries(echo_bot PRIVATE tgbot)
+    if(EXISTS "${TGBOT_CACERT_PATH}")
+        add_custom_command(TARGET echo_bot POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                "${TGBOT_CACERT_PATH}" $<TARGET_FILE_DIR:echo_bot>)
+    endif()
+
+    # 群管理：贴纸发出 1 分钟后自动删除，/sticker on|off 由群管理员控制
+    add_executable(group_admin examples/group_admin/main.cpp)
+    target_link_libraries(group_admin PRIVATE tgbot)
+    if(EXISTS "${TGBOT_CACERT_PATH}")
+        add_custom_command(TARGET group_admin POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                "${TGBOT_CACERT_PATH}" $<TARGET_FILE_DIR:group_admin>)
+    endif()
 endif()
